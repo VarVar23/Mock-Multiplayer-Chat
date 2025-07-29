@@ -42,7 +42,7 @@ namespace ChatSystem.UI
                         .Where(_ => _inputMessage.text != string.Empty)
                         .Subscribe(_ =>
                         {
-                            Send(new ChatMessageInfo(_playerName, _inputMessage.text, ChatType.Team, TeamType.Yellow));
+                            Send(new ChatMessageInfo(_playerName, _inputMessage.text, ChatType.Public, TeamType.Red));
                             ClearInputField();
                         })
                         .AddTo(this);
