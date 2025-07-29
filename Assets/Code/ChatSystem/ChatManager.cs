@@ -13,12 +13,24 @@ namespace ChatSystem.Core
         private readonly IChatNetwork _network;
         private readonly Subject<ChatMessageInfo> _messages = new();
         private readonly Subject<(EventType, object)> _events = new();
+        private readonly IChatMediator _mediator;
 
-        public ChatManager(IChatNetwork network)
+        public ChatManager(IChatNetwork network, IChatMediator mediator = null)
         {
             _network = network;
-            _network.OnMessageReceived.Subscribe(_messages.OnNext);
-            _network.OnEventReceived.Subscribe(_events.OnNext);
+            _mediator = mediator;
+
+            _network.OnMessageReceived.Subscribe(message =>
+            {
+                _messages.OnNext(message);
+                _mediator?.Publish(message);
+            });
+
+            _network.OnEventReceived.Subscribe(events =>
+            {
+                _events.OnNext(events);
+                _mediator?.Publish(events);
+            });
         }
 
         public async Task SendChatMessageAsync(ChatMessageInfo message)

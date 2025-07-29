@@ -113,9 +113,9 @@ namespace ChatSystem.Tests
         public async Task SendMessageAsync_Broadcast_ToMultipleClients()
         {
             // Arrange
-            MockChatNetwork.Clients.Clear();
-            var player1 = new MockChatNetwork("Player1", TeamType.Red);
-            var player2 = new MockChatNetwork("Player2", TeamType.Red);
+            var room = new MockChatRoom();
+            var player1 = new MockChatNetwork("Player1", TeamType.Red, room);
+            var player2 = new MockChatNetwork("Player2", TeamType.Red, room);
             var manager1 = new ChatManager(player1);
             var manager2 = new ChatManager(player2);
 
@@ -135,10 +135,10 @@ namespace ChatSystem.Tests
         public async Task SendMessageAsync_Broadcast_ToTeamClients()
         {
             // Arrange
-            MockChatNetwork.Clients.Clear();
-            var player1 = new MockChatNetwork("Player1", TeamType.Red);
-            var player2 = new MockChatNetwork("Player2", TeamType.Red);
-            var player3 = new MockChatNetwork("Player3", TeamType.Blue);
+            var room = new MockChatRoom();
+            var player1 = new MockChatNetwork("Player1", TeamType.Red, room);
+            var player2 = new MockChatNetwork("Player2", TeamType.Red, room);
+            var player3 = new MockChatNetwork("Player3", TeamType.Blue, room);
             var manager1 = new ChatManager(player1);
             var manager2 = new ChatManager(player2);
             var manager3 = new ChatManager(player3);
@@ -156,6 +156,30 @@ namespace ChatSystem.Tests
             // Assert
             Assert.That(receivedByPlayer2, Is.EqualTo(expectedMessage));
             Assert.That(receivedByPlayer3, Is.Null);
+        }
+
+        [Test]
+        public void Mediator_Routes_ChatMessage_ToHandler()
+        {
+            // Arrange
+            var mediator = new ChatMediator();
+            ChatMessageInfo? received = null;
+            mediator.Register<ChatMessageInfo>(message => received = message);
+
+            var mockNetwork = new Mock<IChatNetwork>();
+            var messageSubject = new Subject<ChatMessageInfo>();
+            mockNetwork.Setup(n => n.OnMessageReceived).Returns(messageSubject);
+            mockNetwork.Setup(n => n.OnEventReceived).Returns(new Subject<(EventType, object)>());
+
+            var manager = new ChatManager(mockNetwork.Object, mediator);
+
+            // Act
+            var message = new ChatMessageInfo("Player1", "Hello", ChatType.Public);
+            messageSubject.OnNext(message);
+
+            // Assert
+            Assert.That(received, Is.Not.Null);
+            Assert.That(received.Message, Is.EqualTo("Hello"));
         }
     }
 }
