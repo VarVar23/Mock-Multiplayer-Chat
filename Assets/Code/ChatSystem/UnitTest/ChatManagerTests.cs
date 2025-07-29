@@ -1,4 +1,5 @@
 ﻿using ChatSystem.Core;
+using ChatSystem.Mocks;
 using Moq;
 using NUnit.Framework;
 using System;
@@ -17,7 +18,7 @@ namespace ChatSystem.Tests
         public void SetUp()
         {
             _mockNetwork = new Mock<IChatNetwork>();
-            _mockNetwork.Setup(n => n.OnMessageReceived).Returns(new Subject<string>());
+            _mockNetwork.Setup(n => n.OnMessageReceived).Returns(new Subject<ChatMessageInfo>());
             _mockNetwork.Setup(n => n.OnEventReceived).Returns(new Subject<(EventType, object)>());
         }
 
@@ -25,28 +26,35 @@ namespace ChatSystem.Tests
         public async Task SendMessageAsync_CallsNetworkSend_AndBroadcasts()
         {
             // Arrange
-            var messageSubject = new Subject<string>();
+            var messageSubject = new Subject<ChatMessageInfo>();
             _mockNetwork.Setup(n => n.OnMessageReceived).Returns(messageSubject);
-            string? receivedMessage = null;
-            _manager = new ChatManager(_mockNetwork.Object);
-            _manager.Messages.Subscribe(msg =>
-            {
-                receivedMessage = msg;
-            });
 
-            _mockNetwork.Setup(n => n.SendMessageAsync(It.IsAny<string>(), It.IsAny<string>()))
+            ChatMessageInfo? receivedMessage = null;
+
+            _manager = new ChatManager(_mockNetwork.Object);
+            _manager.Messages.Subscribe(msg => receivedMessage = msg);
+            ChatMessageInfo expectedMessage = new("Player1", "Hello", ChatType.Public);
+
+            _mockNetwork.Setup(n => n.SendMessageAsync(It.IsAny<ChatMessageInfo>()))
                        .Returns(Task.CompletedTask)
-                       .Callback<string, string>((msg, sender) =>
+                       .Callback<ChatMessageInfo>(message =>
                        {
-                           messageSubject.OnNext($"{sender}: {msg}"); // Simulate broadcast
+                           messageSubject.OnNext(message);
                        });
 
             // Act
-            await _manager.SendChatMessageAsync("Hello", "Player1");
+            await _manager.SendChatMessageAsync(expectedMessage);
 
             // Assert
-            _mockNetwork.Verify(n => n.SendMessageAsync("Hello", "Player1"), Times.Once());
-            Assert.That(receivedMessage, Is.EqualTo("Player1: Hello"));
+            _mockNetwork.Verify(n => n.SendMessageAsync(It.Is<ChatMessageInfo>(message => 
+                message.Sender == "Player1" &&
+                message.Message == "Hello" && 
+                message.Type == ChatType.Public)), Times.Once());
+
+            Assert.That(receivedMessage, Is.Not.Null);
+            Assert.That(receivedMessage.Sender, Is.EqualTo("Player1"));
+            Assert.That(receivedMessage.Message, Is.EqualTo("Hello"));
+            Assert.That(receivedMessage.Type, Is.EqualTo(ChatType.Public));
         }
 
         [Test]
@@ -60,9 +68,9 @@ namespace ChatSystem.Tests
             _manager.Events.Subscribe(ev => receivedEvent = ev);
 
             _mockNetwork.Setup(n => n.RaiseEventAsync(It.IsAny<EventType>(), It.IsAny<object>()))
-                       .Returns(Task.CompletedTask)
-                       .Callback<EventType, object>((type, data) =>
-                           eventSubject.OnNext((type, data)));
+                        .Returns(Task.CompletedTask)
+                        .Callback<EventType, object>((type, data) =>
+                         eventSubject.OnNext((type, data)));
 
             var builder = new NotificationBuilder()
                 .SetType(EventType.KillNotification)
@@ -82,22 +90,72 @@ namespace ChatSystem.Tests
         public async Task SendMessageAsync_OnDisconnect_RetriesAfterReconnect()
         {
             // Arrange
-            var messageSubject = new Subject<string>();
+            var messageSubject = new Subject<ChatMessageInfo>();
             _mockNetwork.Setup(n => n.OnMessageReceived).Returns(messageSubject);
 
-            _mockNetwork.SetupSequence(n => n.SendMessageAsync(It.IsAny<string>(), It.IsAny<string>()))
-                       .ThrowsAsync(new Exception("Disconnected"))
-                       .Returns(Task.CompletedTask);
+            _mockNetwork.SetupSequence(n => n.SendMessageAsync(It.IsAny<ChatMessageInfo>()))
+                        .ThrowsAsync(new Exception("Disconnected"))
+                        .Returns(Task.CompletedTask);
 
             _mockNetwork.Setup(n => n.SimulateReconnect()).Callback(() => { });
             _manager = new ChatManager(_mockNetwork.Object);
+            ChatMessageInfo expectedMessage = new("Player1", "Hello", ChatType.Public);
 
             // Act
-            await _manager.SendChatMessageAsync("Hello", "Player1");
+            await _manager.SendChatMessageAsync(expectedMessage);
 
             // Assert
             _mockNetwork.Verify(n => n.SimulateReconnect(), Times.Once());
-            _mockNetwork.Verify(n => n.SendMessageAsync("Hello", "Player1"), Times.Exactly(2)); // Initial + retry
+            _mockNetwork.Verify(n => n.SendMessageAsync(expectedMessage), Times.Exactly(2)); // Initial + retry
+        }
+
+        [Test]
+        public async Task SendMessageAsync_Broadcast_ToMultipleClients()
+        {
+            // Arrange
+            MockChatNetwork.Clients.Clear();
+            var player1 = new MockChatNetwork("Player1", TeamType.Red);
+            var player2 = new MockChatNetwork("Player2", TeamType.Red);
+            var manager1 = new ChatManager(player1);
+            var manager2 = new ChatManager(player2);
+
+            ChatMessageInfo? receivedByPlayer2 = null;
+            manager2.Messages.Subscribe(message => receivedByPlayer2 = message);
+            ChatMessageInfo expectedMessage = new("Player1", "Hello", ChatType.Public, TeamType.Red);
+
+            // Act
+            await manager1.SendChatMessageAsync(expectedMessage);
+            await Task.Delay(300);
+
+            // Assert
+            Assert.That(receivedByPlayer2, Is.EqualTo(expectedMessage));
+        }
+
+        [Test]
+        public async Task SendMessageAsync_Broadcast_ToTeamClients()
+        {
+            // Arrange
+            MockChatNetwork.Clients.Clear();
+            var player1 = new MockChatNetwork("Player1", TeamType.Red);
+            var player2 = new MockChatNetwork("Player2", TeamType.Red);
+            var player3 = new MockChatNetwork("Player3", TeamType.Blue);
+            var manager1 = new ChatManager(player1);
+            var manager2 = new ChatManager(player2);
+            var manager3 = new ChatManager(player3);
+
+            ChatMessageInfo? receivedByPlayer2 = null;
+            ChatMessageInfo? receivedByPlayer3 = null;
+            manager2.Messages.Subscribe(message => receivedByPlayer2 = message);
+            manager3.Messages.Subscribe(message => receivedByPlayer3 = message);
+            ChatMessageInfo expectedMessage = new("Player1", "Hello Red Team", ChatType.Team, TeamType.Red);
+
+            // Act
+            await manager1.SendChatMessageAsync(expectedMessage);
+            await Task.Delay(300);
+
+            // Assert
+            Assert.That(receivedByPlayer2, Is.EqualTo(expectedMessage));
+            Assert.That(receivedByPlayer3, Is.Null);
         }
     }
 }
